@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a0a" />
+<title>iRainbow Parent Ops</title>
+<style>
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; padding: 0; }
+body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #f0f0f0; -webkit-font-smoothing: antialiased; padding-bottom: env(safe-area-inset-bottom); }
+.page { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 18px; margin: 24px 0 12px; }
+.sub { color: #888; font-size: 14px; margin-bottom: 24px; }
+.card { background: #161616; border: 1px solid #2a2a2a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.metric { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #222; }
+.metric:last-child { border-bottom: none; }
+.metric .label { color: #999; }
+.metric .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric .value.deficit { color: #ef5350; }
+.metric .value.good { color: #66bb6a; }
+input, select, textarea { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333; background: #0f0f0f; color: #f0f0f0; font: inherit; margin-bottom: 12px; }
+textarea { min-height: 80px; resize: vertical; }
+label { display: block; font-size: 13px; color: #aaa; margin-bottom: 4px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+button { padding: 14px 20px; border-radius: 8px; background: #ff7043; color: #fff; border: none; font: 600 16px/1 inherit; cursor: pointer; width: 100%; }
+button:hover { background: #f4511e; }
+button:disabled { background: #444; cursor: not-allowed; }
+button.ghost { background: #222; }
+.muted { color: #888; font-size: 13px; }
+.error { background: #4a1d1d; border: 1px solid #6b2626; color: #ffb4b4; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+.success { background: #1d4a1d; border: 1px solid #266b26; color: #b4ffb4; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.tag.paying { background: #1976d2; color: white; }
+.tag.churned { background: #d32f2f; color: white; }
+.recent-item { padding: 12px; border-bottom: 1px solid #222; }
+.recent-item:last-child { border-bottom: none; }
+.recent-item .quote { color: #ccc; font-style: italic; margin: 6px 0; }
+.tab-row { display: flex; gap: 4px; margin: 16px 0; }
+.tab-row button { flex: 1; background: #1a1a1a; color: #aaa; }
+.tab-row button.active { background: #ff7043; color: white; }
+.callout { background: #2d1d05; border: 1px solid #5a3d10; border-left: 4px solid #ff7043; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+.warn { background: #3d1a1a; border: 1px solid #6b2626; border-left: 4px solid #ef5350; padding: 12px; border-radius: 8px; margin-bottom: 16px; color: #ffb4b4; }
+</style>
+</head>
+<body>
+<div class="page" id="root">Loading&hellip;</div>
+<script>
+const SUPABASE_URL = 'https://zuwyqloximplfcrogisu.supabase.co';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1d3lxbG94aW1wbGZjcm9naXN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNzk1MjgsImV4cCI6MjA5MTc1NTUyOH0.BsmwmTMhtR5sSGujnnzYw1J4uIS1p25twkSuXHHs3RI';
+const SECRET_LS_KEY = 'ceo_ops_secret_v1';
+const OPERATION = { start: new Date('2026-05-15T00:00:00+02:00'), end: new Date('2026-06-26T23:59:59+02:00'), goalTotal: 100, goalPaying: 50, goalChurned: 50, targetPerDay: 3, floorPerDay: 1 };
+
+function operationState(today) {
+  today = today || new Date();
+  const t = today.getTime();
+  if (t < OPERATION.start.getTime()) return { phase: 'pre-start', dayNum: 0, weekNum: 0 };
+  if (t > OPERATION.end.getTime())   return { phase: 'ended', dayNum: 0, weekNum: 7 };
+  const daysFromStart = Math.floor((t - OPERATION.start.getTime()) / 86400000);
+  return { phase: 'active', dayNum: daysFromStart + 1, weekNum: Math.floor(daysFromStart / 7) + 1, segment: daysFromStart < 21 ? 'PAYING' : 'CHURNED' };
+}
+
+function weekdaysBetween(start, end) {
+  let count = 0;
+  const cursor = new Date(start); cursor.setHours(0,0,0,0);
+  const endDay = new Date(end);   endDay.setHours(0,0,0,0);
+  while (cursor <= endDay) { const d = cursor.getDay(); if (d !== 0 && d !== 6) count++; cursor.setDate(cursor.getDate() + 1); }
+  return count;
+}
+
+async function rpc(fn, payload) {
+  const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/ceo_ops_' + fn, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': 'Bearer ' + ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).message || JSON.parse(text).hint || text; } catch (e) {}
+    throw new Error(msg);
+  }
+  try { return JSON.parse(text); } catch (e) { return text; }
+}
+
+const state = { secret: null, tab: 'dashboard', dashboard: null, loading: false, error: null, success: null, formSegment: null };
+
+function escapeHTML(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c];
+  });
+}
+
+function render() {
+  const root = document.getElementById('root');
+  if (!state.secret) {
+    root.innerHTML = renderLogin();
+    document.getElementById('login-form').addEventListener('submit', onLogin);
+    document.getElementById('secret-input').focus();
+    return;
+  }
+  root.innerHTML = renderApp();
+  document.getElementById('tab-dashboard').addEventListener('click', function() { state.tab = 'dashboard'; state.error = null; state.success = null; render(); });
+  document.getElementById('tab-log').addEventListener('click', function() { state.tab = 'log'; state.error = null; state.success = null; render(); });
+  if (state.tab === 'dashboard') {
+    document.getElementById('refresh-btn').addEventListener('click', refreshDashboard);
+  } else {
+    document.getElementById('log-form').addEventListener('submit', onSubmitInterview);
+    document.getElementById('segment-select').addEventListener('change', function(e) { state.formSegment = e.target.value; render(); });
+  }
+  document.getElementById('logout-btn').addEventListener('click', function(e) {
+    e.preventDefault();
+    localStorage.removeItem(SECRET_LS_KEY);
+    state.secret = null; state.dashboard = null; render();
+  });
+}
+
+function renderLogin() {
+  return '<h1>&#128293; iRainbow Parent Ops</h1>'
+    + '<div class="sub">Enter password to continue.</div>'
+    + (state.error ? '<div class="error">' + escapeHTML(state.error) + '</div>' : '')
+    + '<form id="login-form"><input type="password" id="secret-input" placeholder="password" autocomplete="current-password" />'
+    + '<button type="submit">Unlock</button></form>';
+}
+
+function renderApp() {
+  const s = operationState();
+  const today = new Date();
+  const weekdaysSinceStart = s.phase === 'active' ? weekdaysBetween(OPERATION.start, today) : 0;
+  const d = state.dashboard;
+  const deficit = (s.phase === 'active' && d) ? weekdaysSinceStart - d.total_count : 0;
+  return '<h1>&#128293; iRainbow Parent Ops</h1>'
+    + '<div class="sub">100 calls &middot; 6 weeks &middot; 2026-05-15 &rarr; 2026-06-26 &middot; <a href="#" id="logout-btn" style="color:#888">sign out</a></div>'
+    + '<div class="tab-row">'
+    + '<button id="tab-dashboard" class="' + (state.tab === 'dashboard' ? 'active' : '') + '">Dashboard</button>'
+    + '<button id="tab-log" class="' + (state.tab === 'log' ? 'active' : '') + '">Log a call</button>'
+    + '</div>'
+    + (state.error ? '<div class="error">' + escapeHTML(state.error) + '</div>' : '')
+    + (state.success ? '<div class="success">' + escapeHTML(state.success) + '</div>' : '')
+    + (state.tab === 'dashboard' ? renderDashboard(s, weekdaysSinceStart, deficit) : renderLogForm(s));
+}
+
+function renderDashboard(s, weekdaysSinceStart, deficit) {
+  const d = state.dashboard;
+  if (!d) return '<div class="muted">' + (state.loading ? 'Loading&hellip;' : 'No data yet') + '</div>';
+  let banner = '';
+  if (s.phase === 'pre-start') {
+    banner = '<div class="callout">Operation starts <strong>Friday 2026-05-15</strong>. First call block: 9&ndash;11am SAST.</div>';
+  } else if (s.phase === 'active') {
+    if (deficit >= 2) {
+      banner += '<div class="warn"><strong>&#9888;&#65039; Chain break.</strong> Expected &ge; ' + weekdaysSinceStart + ' calls by today. Logged: ' + d.total_count + '. Deficit: ' + deficit + '. Either commit or shut this system down.</div>';
+    }
+    banner += '<div class="callout"><strong>Day ' + s.dayNum + ' &middot; Week ' + s.weekNum + '</strong> &middot; Today’s segment: <strong>' + s.segment + ' parents</strong><br/><span class="muted">Target 3 calls. Floor 1. Don’t break the chain.</span></div>';
+  } else if (s.phase === 'ended') {
+    banner = '<div class="callout">Operation ended 2026-06-26. Final report should be in your inbox.</div>';
+  }
+  let recent = '';
+  if (!d.recent || d.recent.length === 0) {
+    recent = '<div style="padding:16px" class="muted">No calls logged yet. Hit &quot;Log a call&quot; above.</div>';
+  } else {
+    recent = d.recent.map(function(r) {
+      return '<div class="recent-item"><div><strong>' + escapeHTML(r.parent_name) + '</strong> '
+        + '<span class="tag ' + r.segment.toLowerCase() + '">' + r.segment + '</span> '
+        + '<span class="muted">&middot; ' + r.call_date
+        + (r.grade ? ' &middot; ' + escapeHTML(r.grade) : '')
+        + (r.months_subscribed != null ? ' &middot; ' + r.months_subscribed + 'mo' : '')
+        + '</span></div>'
+        + (r.verbatim_quote ? '<div class="quote">&ldquo;' + escapeHTML(r.verbatim_quote) + '&rdquo;</div>' : '')
+        + (r.q4_change_one_thing ? '<div class="muted">Change: ' + escapeHTML(r.q4_change_one_thing) + '</div>' : '')
+        + (r.surprise ? '<div class="muted">Surprise: ' + escapeHTML(r.surprise) + '</div>' : '')
+        + '</div>';
+    }).join('');
+  }
+  return banner
+    + '<div class="card"><h2 style="margin-top:0">Progress</h2>'
+    + '<div class="metric"><span class="label">Paying</span><span class="value">' + d.paying_count + ' / ' + OPERATION.goalPaying + '</span></div>'
+    + '<div class="metric"><span class="label">Churned</span><span class="value">' + d.churned_count + ' / ' + OPERATION.goalChurned + '</span></div>'
+    + '<div class="metric"><span class="label">Total</span><span class="value">' + d.total_count + ' / ' + OPERATION.goalTotal + '</span></div>'
+    + (s.phase === 'active'
+        ? '<div class="metric"><span class="label">Weekdays elapsed</span><span class="value">' + weekdaysSinceStart + '</span></div>'
+          + '<div class="metric"><span class="label">Deficit (vs floor)</span><span class="value ' + (deficit >= 2 ? 'deficit' : deficit > 0 ? '' : 'good') + '">' + (deficit > 0 ? '-' + deficit : '+' + (-deficit)) + '</span></div>'
+        : '')
+    + '</div>'
+    + '<h2>Recent calls</h2>'
+    + '<div class="card" style="padding:0">' + recent + '</div>'
+    + '<button class="ghost" id="refresh-btn" style="margin-top:16px" ' + (state.loading ? 'disabled' : '') + '>'
+    + (state.loading ? 'Refreshing&hellip;' : 'Refresh') + '</button>';
+}
+
+function renderLogForm(s) {
+  const defaultSegment = (s.phase === 'active' ? s.segment : 'PAYING');
+  const currentSegment = state.formSegment || defaultSegment;
+  return '<form id="log-form">'
+    + '<div class="card"><h2 style="margin-top:0">Who you spoke to</h2>'
+    + '<label>Parent name</label><input type="text" name="parent_name" required autofocus />'
+    + '<div class="row2"><div><label>Segment</label>'
+    + '<select id="segment-select" name="segment">'
+    + '<option value="PAYING" ' + (currentSegment === 'PAYING' ? 'selected' : '') + '>PAYING</option>'
+    + '<option value="CHURNED" ' + (currentSegment === 'CHURNED' ? 'selected' : '') + '>CHURNED</option>'
+    + '</select></div>'
+    + '<div><label>Kid’s grade</label><input type="text" name="grade" placeholder="e.g. Grade 5" /></div></div>'
+    + '<div class="row2"><div><label>Months subscribed</label><input type="number" name="months_subscribed" min="0" max="120" /></div>'
+    + '<div><label>Contact (optional)</label><input type="text" name="parent_contact" placeholder="email or phone" /></div></div>'
+    + '</div>'
+    + '<div class="card"><h2 style="margin-top:0">The 5 questions</h2>'
+    + '<label>1. What made you sign up to iRainbow?</label><textarea name="q1_signup"></textarea>'
+    + '<label>2. What did you expect would happen for your kid?</label><textarea name="q2_expected"></textarea>'
+    + '<label>3. What’s actually happening?</label><textarea name="q3_actual"></textarea>'
+    + '<label>4. If you could change ONE thing, what would it be?</label><textarea name="q4_change_one_thing"></textarea>'
+    + (currentSegment === 'CHURNED' ? '<label>5. What was the moment you decided to cancel?</label><textarea name="q5_churn_moment"></textarea>' : '')
+    + '</div>'
+    + '<div class="card"><h2 style="margin-top:0">Insight</h2>'
+    + '<label>Surprise (something that broke your hypothesis)</label><textarea name="surprise"></textarea>'
+    + '<label>Verbatim quote worth remembering</label><textarea name="verbatim_quote" placeholder="..."></textarea>'
+    + (currentSegment === 'PAYING' ? '<label>Renewal threat</label><textarea name="renewal_threat"></textarea>' : '')
+    + (currentSegment === 'CHURNED' ? '<label>Win-back possible?</label><textarea name="win_back_possible"></textarea>' : '')
+    + '<label>Notes</label><textarea name="notes"></textarea>'
+    + '</div>'
+    + '<button type="submit" ' + (state.loading ? 'disabled' : '') + '>' + (state.loading ? 'Saving&hellip;' : 'Save call') + '</button>'
+    + '</form>';
+}
+
+async function onLogin(e) {
+  e.preventDefault();
+  const v = document.getElementById('secret-input').value;
+  if (!v) return;
+  localStorage.setItem(SECRET_LS_KEY, v);
+  state.secret = v;
+  await refreshDashboard();
+  render();
+}
+
+async function refreshDashboard() {
+  state.loading = true; state.error = null; render();
+  try {
+    state.dashboard = await rpc('get_dashboard', { p_secret: state.secret });
+  } catch (err) {
+    if (String(err.message || '').indexOf('unauthorized') >= 0 || String(err.message || '').indexOf('42501') >= 0) {
+      localStorage.removeItem(SECRET_LS_KEY);
+      state.secret = null;
+      state.error = 'Wrong password.';
+    } else {
+      state.error = err.message || 'Failed to load';
+    }
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+async function onSubmitInterview(e) {
+  e.preventDefault();
+  state.loading = true; state.error = null; state.success = null; render();
+  const fd = new FormData(e.target);
+  const seg = fd.get('segment');
+  const payload = {
+    p_secret: state.secret,
+    p_parent_name: fd.get('parent_name'),
+    p_segment: seg,
+    p_grade: fd.get('grade') || null,
+    p_months_subscribed: fd.get('months_subscribed') ? Number(fd.get('months_subscribed')) : null,
+    p_parent_contact: fd.get('parent_contact') || null,
+    p_q1_signup: fd.get('q1_signup') || null,
+    p_q2_expected: fd.get('q2_expected') || null,
+    p_q3_actual: fd.get('q3_actual') || null,
+    p_q4_change_one_thing: fd.get('q4_change_one_thing') || null,
+    p_surprise: fd.get('surprise') || null,
+    p_verbatim_quote: fd.get('verbatim_quote') || null,
+    p_notes: fd.get('notes') || null,
+  };
+  if (seg === 'CHURNED') {
+    payload.p_q5_churn_moment = fd.get('q5_churn_moment') || null;
+    payload.p_win_back_possible = fd.get('win_back_possible') || null;
+  } else {
+    payload.p_renewal_threat = fd.get('renewal_threat') || null;
+  }
+  try {
+    await rpc('add_interview', payload);
+    state.success = 'Interview logged.';
+    await refreshDashboard();
+    setTimeout(function() { state.tab = 'dashboard'; state.success = null; render(); }, 1200);
+  } catch (err) {
+    state.error = err.message || 'Failed to save';
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+(async function() {
+  const saved = localStorage.getItem(SECRET_LS_KEY);
+  if (saved) {
+    state.secret = saved;
+    await refreshDashboard();
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>
