@@ -105,10 +105,13 @@ function render() {
   document.getElementById('tab-dashboard').addEventListener('click', function() { state.tab = 'dashboard'; state.error = null; state.success = null; render(); });
   document.getElementById('tab-log').addEventListener('click', function() { state.tab = 'log'; state.error = null; state.success = null; render(); });
   if (state.tab === 'dashboard') {
-    document.getElementById('refresh-btn').addEventListener('click', refreshDashboard);
+    const refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', refreshDashboard);
   } else {
-    document.getElementById('log-form').addEventListener('submit', onSubmitInterview);
-    document.getElementById('segment-select').addEventListener('change', function(e) { state.formSegment = e.target.value; render(); });
+    const logForm = document.getElementById('log-form');
+    if (logForm) logForm.addEventListener('submit', onSubmitInterview);
+    const segSel = document.getElementById('segment-select');
+    if (segSel) segSel.addEventListener('change', function(e) { state.formSegment = e.target.value; render(); });
   }
   document.getElementById('logout-btn').addEventListener('click', function(e) {
     e.preventDefault();
